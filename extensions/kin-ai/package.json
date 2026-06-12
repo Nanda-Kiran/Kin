@@ -1,0 +1,55 @@
+{
+	"name": "kin-ai",
+	"displayName": "Kin AI",
+	"description": "Kin's AI model provider — local models via Ollama.",
+	"version": "0.1.0",
+	"publisher": "kin",
+	"license": "MIT",
+	"engines": {
+		"vscode": "^1.125.0"
+	},
+	"categories": [
+		"AI",
+		"Chat"
+	],
+	"main": "./out/extension",
+	"activationEvents": [],
+	"scripts": {
+		"compile": "gulp compile-extension:kin-ai",
+		"watch": "gulp watch-extension:kin-ai"
+	},
+	"capabilities": {
+		"virtualWorkspaces": true,
+		"untrustedWorkspaces": {
+			"supported": true
+		}
+	},
+	"contributes": {
+		"languageModelChatProviders": [
+			{
+				"vendor": "kin",
+				"displayName": "Kin (Ollama)"
+			}
+		],
+		"configuration": {
+			"title": "Kin AI",
+			"properties": {
+				"kin.ollama.baseUrl": {
+					"type": "string",
+					"default": "http://localhost:11434",
+					"description": "Base URL of the Ollama server providing Kin's local models."
+				},
+				"kin.ollama.contextLength": {
+					"type": "number",
+					"default": 8192,
+					"description": "Context window (max input tokens) advertised for Ollama models."
+				},
+				"kin.ollama.maxOutputTokens": {
+					"type": "number",
+					"default": 4096,
+					"description": "Maximum output tokens advertised for Ollama models."
+				}
+			}
+		}
+	}
+}
