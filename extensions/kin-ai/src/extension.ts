@@ -4,6 +4,8 @@
  *--------------------------------------------------------------------------------------------*/
 
 import * as vscode from 'vscode';
+import { KinIndexer } from './indexer.js';
+import { registerKinParticipant } from './participant.js';
 
 interface IOllamaModel {
 	readonly name: string;
@@ -250,6 +252,29 @@ export function activate(context: vscode.ExtensionContext): void {
 	context.subscriptions.push(
 		vscode.lm.registerLanguageModelChatProvider('kin', new KinOllamaProvider()),
 		vscode.languages.registerInlineCompletionItemProvider({ pattern: '**' }, new KinCompletionProvider())
+	);
+
+	const storageUri = context.storageUri ?? context.globalStorageUri;
+	const indexer = new KinIndexer(storageUri);
+	registerKinParticipant(context, indexer);
+
+	context.subscriptions.push(
+		vscode.commands.registerCommand('kin.indexWorkspace', async () => {
+			const result = await vscode.window.withProgress(
+				{
+					location: vscode.ProgressLocation.Notification,
+					title: vscode.l10n.t('Kin: indexing workspace'),
+					cancellable: true,
+				},
+				(progress, token) => indexer.indexWorkspace(progress, token)
+			);
+			vscode.window.showInformationMessage(
+				vscode.l10n.t('Kin index updated: {0} files indexed, {1} unchanged or skipped, {2} chunks total.', result.indexedFiles, result.skippedFiles, indexer.chunkCount)
+			);
+		}),
+		vscode.workspace.onDidSaveTextDocument(document => {
+			void indexer.updateFile(document);
+		})
 	);
 }
 

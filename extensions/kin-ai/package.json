@@ -33,6 +33,21 @@
 				"displayName": "Kin (Ollama)"
 			}
 		],
+		"chatParticipants": [
+			{
+				"id": "kin.codebase",
+				"name": "kin",
+				"fullName": "Kin Codebase",
+				"description": "Ask questions about your codebase",
+				"isSticky": true
+			}
+		],
+		"commands": [
+			{
+				"command": "kin.indexWorkspace",
+				"title": "Kin: Index Workspace"
+			}
+		],
 		"configuration": {
 			"title": "Kin AI",
 			"properties": {
@@ -70,6 +85,21 @@
 					"type": "number",
 					"default": 150,
 					"description": "Delay before requesting a completion, so fast typing cancels stale requests."
+				},
+				"kin.codebase.embeddingModel": {
+					"type": "string",
+					"default": "nomic-embed-text",
+					"description": "Ollama embedding model used to index the codebase."
+				},
+				"kin.codebase.chatModel": {
+					"type": "string",
+					"default": "llama3.2:3b",
+					"description": "Ollama chat model used by the @kin codebase participant."
+				},
+				"kin.codebase.maxFiles": {
+					"type": "number",
+					"default": 1500,
+					"description": "Maximum number of files indexed per workspace."
 				}
 			}
 		}
