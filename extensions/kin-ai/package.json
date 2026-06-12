@@ -13,7 +13,9 @@
 		"Chat"
 	],
 	"main": "./out/extension",
-	"activationEvents": [],
+	"activationEvents": [
+		"onStartupFinished"
+	],
 	"scripts": {
 		"compile": "gulp compile-extension:kin-ai",
 		"watch": "gulp watch-extension:kin-ai"
@@ -48,6 +50,26 @@
 					"type": "number",
 					"default": 4096,
 					"description": "Maximum output tokens advertised for Ollama models."
+				},
+				"kin.completions.enabled": {
+					"type": "boolean",
+					"default": true,
+					"description": "Enable Kin inline (ghost text) completions."
+				},
+				"kin.completions.model": {
+					"type": "string",
+					"default": "qwen2.5-coder:1.5b-base",
+					"description": "Ollama model used for inline completions. Must support fill-in-the-middle (e.g. qwen2.5-coder base variants)."
+				},
+				"kin.completions.maxTokens": {
+					"type": "number",
+					"default": 96,
+					"description": "Maximum tokens generated per inline completion."
+				},
+				"kin.completions.debounceMs": {
+					"type": "number",
+					"default": 150,
+					"description": "Delay before requesting a completion, so fast typing cancels stale requests."
 				}
 			}
 		}

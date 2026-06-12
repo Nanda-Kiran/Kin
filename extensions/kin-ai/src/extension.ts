@@ -21,10 +21,22 @@ interface IOllamaChatChunk {
 	readonly error?: string;
 }
 
+interface IOllamaGenerateResponse {
+	readonly response?: string;
+	readonly error?: string;
+}
+
 interface IKinConfig {
 	readonly baseUrl: string;
 	readonly contextLength: number;
 	readonly maxOutputTokens: number;
+}
+
+interface IKinCompletionsConfig {
+	readonly enabled: boolean;
+	readonly model: string;
+	readonly maxTokens: number;
+	readonly debounceMs: number;
 }
 
 function getConfig(): IKinConfig {
@@ -33,6 +45,16 @@ function getConfig(): IKinConfig {
 		baseUrl: (cfg.get<string>('baseUrl') || 'http://localhost:11434').replace(/\/+$/, ''),
 		contextLength: cfg.get<number>('contextLength') || 8192,
 		maxOutputTokens: cfg.get<number>('maxOutputTokens') || 4096,
+	};
+}
+
+function getCompletionsConfig(): IKinCompletionsConfig {
+	const cfg = vscode.workspace.getConfiguration('kin.completions');
+	return {
+		enabled: cfg.get<boolean>('enabled') ?? true,
+		model: cfg.get<string>('model') || 'qwen2.5-coder:1.5b-base',
+		maxTokens: cfg.get<number>('maxTokens') || 96,
+		debounceMs: cfg.get<number>('debounceMs') || 150,
 	};
 }
 
@@ -158,9 +180,76 @@ class KinOllamaProvider implements vscode.LanguageModelChatProvider {
 	}
 }
 
+/** Characters of document text sent before/after the cursor for fill-in-the-middle. */
+const FIM_PREFIX_CHARS = 4000;
+const FIM_SUFFIX_CHARS = 1500;
+
+/**
+ * Ghost-text completions via Ollama's fill-in-the-middle generate API.
+ * Requires a FIM-capable model (e.g. qwen2.5-coder base, codellama:code).
+ */
+class KinCompletionProvider implements vscode.InlineCompletionItemProvider {
+
+	async provideInlineCompletionItems(document: vscode.TextDocument, position: vscode.Position, _context: vscode.InlineCompletionContext, token: vscode.CancellationToken): Promise<vscode.InlineCompletionItem[]> {
+		const { enabled, model, maxTokens, debounceMs } = getCompletionsConfig();
+		if (!enabled) {
+			return [];
+		}
+
+		// Debounce: let rapid keystrokes cancel this request before it hits the model.
+		await new Promise(resolve => setTimeout(resolve, debounceMs));
+		if (token.isCancellationRequested) {
+			return [];
+		}
+
+		const offset = document.offsetAt(position);
+		const text = document.getText();
+		const prefix = text.slice(Math.max(0, offset - FIM_PREFIX_CHARS), offset);
+		const suffix = text.slice(offset, offset + FIM_SUFFIX_CHARS);
+
+		const { baseUrl } = getConfig();
+		try {
+			const response = await fetch(`${baseUrl}/api/generate`, {
+				method: 'POST',
+				headers: { 'Content-Type': 'application/json' },
+				body: JSON.stringify({
+					model,
+					prompt: prefix,
+					suffix,
+					stream: false,
+					options: {
+						num_predict: maxTokens,
+						temperature: 0,
+					},
+				}),
+				signal: abortSignalFrom(token),
+			});
+			if (!response.ok) {
+				return [];
+			}
+			const data = await response.json() as IOllamaGenerateResponse;
+			let completion = (data.response ?? '').replace(/\r\n/g, '\n');
+			// Base models tend to ramble past the insertion point; cut at the
+			// first blank line to keep ghost text scoped to the local edit.
+			const blankLine = completion.indexOf('\n\n');
+			if (blankLine !== -1) {
+				completion = completion.slice(0, blankLine);
+			}
+			if (!completion.trim()) {
+				return [];
+			}
+			return [new vscode.InlineCompletionItem(completion, new vscode.Range(position, position))];
+		} catch {
+			// Aborted or Ollama unavailable — offer nothing.
+			return [];
+		}
+	}
+}
+
 export function activate(context: vscode.ExtensionContext): void {
 	context.subscriptions.push(
-		vscode.lm.registerLanguageModelChatProvider('kin', new KinOllamaProvider())
+		vscode.lm.registerLanguageModelChatProvider('kin', new KinOllamaProvider()),
+		vscode.languages.registerInlineCompletionItemProvider({ pattern: '**' }, new KinCompletionProvider())
 	);
 }
 
