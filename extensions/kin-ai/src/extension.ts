@@ -17,10 +17,28 @@ interface IOllamaTagsResponse {
 	readonly models?: readonly IOllamaModel[];
 }
 
+interface IOllamaToolCall {
+	readonly id?: string;
+	readonly function: {
+		readonly name: string;
+		readonly arguments?: object;
+	};
+}
+
 interface IOllamaChatChunk {
-	readonly message?: { readonly content?: string };
+	readonly message?: {
+		readonly content?: string;
+		readonly tool_calls?: readonly IOllamaToolCall[];
+	};
 	readonly done?: boolean;
 	readonly error?: string;
+}
+
+interface IOllamaChatMessage {
+	role: string;
+	content: string;
+	tool_calls?: { function: { name: string; arguments: object } }[];
+	tool_name?: string;
 }
 
 interface IOllamaGenerateResponse {
@@ -60,28 +78,49 @@ function getCompletionsConfig(): IKinCompletionsConfig {
 	};
 }
 
+function toolResultText(part: vscode.LanguageModelToolResultPart): string {
+	return part.content
+		.map(inner => (inner instanceof vscode.LanguageModelTextPart ? inner.value : ''))
+		.join('');
+}
+
 /**
- * Maps VS Code chat messages to Ollama's {role, content} shape. Tool calls and
- * binary parts are not supported in v1 and are silently dropped.
+ * Maps VS Code chat messages to Ollama's message shape, round-tripping tool
+ * calls (assistant tool_calls) and tool results (role 'tool' messages).
+ * Binary parts are not supported and are silently dropped.
  */
-function toOllamaMessages(messages: readonly vscode.LanguageModelChatRequestMessage[]): { role: string; content: string }[] {
-	const result: { role: string; content: string }[] = [];
+function toOllamaMessages(messages: readonly vscode.LanguageModelChatRequestMessage[]): IOllamaChatMessage[] {
+	const result: IOllamaChatMessage[] = [];
+	// Ollama identifies tool results by tool name, VS Code by callId — map them.
+	const toolNameByCallId = new Map<string, string>();
 	for (const message of messages) {
 		const role = message.role === vscode.LanguageModelChatMessageRole.Assistant ? 'assistant' : 'user';
 		let text = '';
+		const toolCalls: { function: { name: string; arguments: object } }[] = [];
+		const toolResults: { callId: string; content: string }[] = [];
 		for (const part of message.content) {
 			if (part instanceof vscode.LanguageModelTextPart) {
 				text += part.value;
+			} else if (part instanceof vscode.LanguageModelToolCallPart) {
+				toolNameByCallId.set(part.callId, part.name);
+				toolCalls.push({ function: { name: part.name, arguments: part.input } });
 			} else if (part instanceof vscode.LanguageModelToolResultPart) {
-				for (const inner of part.content) {
-					if (inner instanceof vscode.LanguageModelTextPart) {
-						text += inner.value;
-					}
-				}
+				toolResults.push({ callId: part.callId, content: toolResultText(part) });
 			}
 		}
-		if (text.length > 0) {
-			result.push({ role, content: text });
+		if (text.length > 0 || toolCalls.length > 0) {
+			const entry: IOllamaChatMessage = { role, content: text };
+			if (toolCalls.length > 0) {
+				entry.tool_calls = toolCalls;
+			}
+			result.push(entry);
+		}
+		for (const toolResult of toolResults) {
+			result.push({
+				role: 'tool',
+				content: toolResult.content,
+				tool_name: toolNameByCallId.get(toolResult.callId),
+			});
 		}
 	}
 	return result;
@@ -128,8 +167,16 @@ class KinOllamaProvider implements vscode.LanguageModelChatProvider {
 		}
 	}
 
-	async provideLanguageModelChatResponse(model: vscode.LanguageModelChatInformation, messages: readonly vscode.LanguageModelChatRequestMessage[], _options: vscode.ProvideLanguageModelChatResponseOptions, progress: vscode.Progress<vscode.LanguageModelResponsePart>, token: vscode.CancellationToken): Promise<void> {
-		const { baseUrl } = getConfig();
+	async provideLanguageModelChatResponse(model: vscode.LanguageModelChatInformation, messages: readonly vscode.LanguageModelChatRequestMessage[], options: vscode.ProvideLanguageModelChatResponseOptions, progress: vscode.Progress<vscode.LanguageModelResponsePart>, token: vscode.CancellationToken): Promise<void> {
+		const { baseUrl, contextLength } = getConfig();
+		const tools = options.tools?.map(tool => ({
+			type: 'function',
+			function: {
+				name: tool.name,
+				description: tool.description,
+				parameters: tool.inputSchema ?? { type: 'object', properties: {} },
+			},
+		}));
 		const response = await fetch(`${baseUrl}/api/chat`, {
 			method: 'POST',
 			headers: { 'Content-Type': 'application/json' },
@@ -137,6 +184,10 @@ class KinOllamaProvider implements vscode.LanguageModelChatProvider {
 				model: model.id,
 				messages: toOllamaMessages(messages),
 				stream: true,
+				// Ollama defaults num_ctx to ~4k regardless of model limits;
+				// agent prompts are large and would be silently truncated.
+				options: { num_ctx: contextLength },
+				...(tools && tools.length > 0 ? { tools } : {}),
 			}),
 			signal: abortSignalFrom(token),
 		});
@@ -165,6 +216,11 @@ class KinOllamaProvider implements vscode.LanguageModelChatProvider {
 				const content = chunk.message?.content;
 				if (content) {
 					progress.report(new vscode.LanguageModelTextPart(content));
+				}
+				for (const toolCall of chunk.message?.tool_calls ?? []) {
+					// Prefer Ollama's call id; older versions omit it, so mint one.
+					const callId = toolCall.id ?? `kin-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+					progress.report(new vscode.LanguageModelToolCallPart(callId, toolCall.function.name, toolCall.function.arguments ?? {}));
 				}
 				if (chunk.error) {
 					throw new Error(`Ollama: ${chunk.error}`);
