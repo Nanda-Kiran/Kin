@@ -1,78 +1,92 @@
-# Visual Studio Code - Open Source ("Code - OSS")
-[![Feature Requests](https://img.shields.io/github/issues/microsoft/vscode/feature-request.svg)](https://github.com/microsoft/vscode/issues?q=is%3Aopen+is%3Aissue+label%3Afeature-request+sort%3Areactions-%2B1-desc)
-[![Bugs](https://img.shields.io/github/issues/microsoft/vscode/bug.svg)](https://github.com/microsoft/vscode/issues?utf8=✓&q=is%3Aissue+is%3Aopen+label%3Abug)
-[![Gitter](https://img.shields.io/badge/chat-on%20gitter-yellow.svg)](https://gitter.im/Microsoft/vscode)
+# Kin
 
-## The Repository
+A local-first AI code editor built on Code-OSS. Chat, Tab autocomplete, codebase Q&A and Agent mode all run on local models served by [Ollama](https://ollama.com). No API keys.
 
-This repository ("`Code - OSS`") is where we (Microsoft) develop the [Visual Studio Code](https://code.visualstudio.com) product together with the community. Not only do we work on code and issues here, but we also publish our [roadmap](https://github.com/microsoft/vscode/wiki/Roadmap), [monthly iteration plans](https://github.com/microsoft/vscode/wiki/Iteration-Plans), and our [endgame plans](https://github.com/microsoft/vscode/wiki/Running-the-Endgame). This source code is available to everyone under the standard [MIT license](https://github.com/microsoft/vscode/blob/main/LICENSE.txt).
+Kin is a fork of [microsoft/vscode](https://github.com/microsoft/vscode). The editor core is untouched: there are no changes under `src/`. Kin's changes are a rebrand in `product.json`, two small build edits and one built-in extension, [`extensions/kin-ai`](extensions/kin-ai). The extension plugs into VS Code's language-model provider, chat participant and inline-completion APIs.
 
-## Visual Studio Code
+## What it does
 
-<p align="center">
-  <img alt="VS Code in action" src="https://github.com/user-attachments/assets/56af271c-949d-454c-a3ea-16188c063414">
-</p>
+| Feature | How it works | Code |
+|---|---|---|
+| **Local chat models** | A `LanguageModelChatProvider` (vendor `kin`) lists your installed Ollama models in the chat model picker and streams replies from `/api/chat`. It sets each model's tool-calling and vision flags from the capabilities Ollama lists for it, so tool-capable models qualify for Agent mode. | `extensions/kin-ai/src/extension.ts` |
+| **Tab autocomplete** | An `InlineCompletionItemProvider` sends up to 4,000 characters before the cursor and 1,500 after it to Ollama's fill-in-the-middle API (`/api/generate`, default `qwen2.5-coder:1.5b-base`, temperature 0). A debounce (150 ms by default) with cancellation drops stale requests. Output is cut at the first blank line so base models stay on the local edit. | `extensions/kin-ai/src/extension.ts` |
+| **`@kin` codebase chat** | A local semantic index built in four steps: a workspace scan, SHA-1 content-hash change detection, 60-line chunks with a 10-line overlap, and embeddings from `nomic-embed-text`. The index is saved as JSON in extension storage. Saving a file that is already indexed re-embeds that file. For each question, the extension pulls the top 8 chunks by cosine similarity, shows them as file and line references, and streams an answer from a local model. That model is told to use only those excerpts and to cite paths and line numbers. | `extensions/kin-ai/src/indexer.ts`, `extensions/kin-ai/src/participant.ts` |
+| **Agent mode** | Converts VS Code tool definitions to Ollama function calling and emits tool-call parts for streamed `tool_calls`. It maps tool calls and their results back into Ollama messages, so the built-in agent can run tools on local models. `num_ctx` is set explicitly (`kin.ollama.contextLength`) because otherwise Ollama truncates large agent prompts at its ~4k default. | `extensions/kin-ai/src/extension.ts` |
+| **Rebrand** | Changes the product name, data folders (`.kin`) and macOS bundle id (`dev.kin.editor`). It replaces the Windows installer GUIDs with new ones, sets the `kin://` URL protocol, and uses Open VSX as the extension marketplace. The build's hygiene check now rejects any extension gallery other than Open VSX. | `product.json`, `build/hygiene.ts` |
 
-[Visual Studio Code](https://code.visualstudio.com) is a distribution of the `Code - OSS` repository with Microsoft-specific customizations released under a traditional [Microsoft product license](https://code.visualstudio.com/License/).
+## How it works
 
-[Visual Studio Code](https://code.visualstudio.com) combines the simplicity of a code editor with what developers need for their core edit-build-debug cycle. It provides comprehensive code editing, navigation, and understanding support along with lightweight debugging, a rich extensibility model, and lightweight integration with existing tools.
+```
+Kin (Code-OSS fork, no changes under src/)
+├── product.json                   identity, kin:// protocol, Open VSX gallery
+├── build/hygiene.ts               rejects any non-Open-VSX gallery
+├── build/gulpfile.extensions.ts   compiles kin-ai with the other built-ins
+└── extensions/kin-ai/             all AI logic
+    ├── src/extension.ts           chat provider, Tab completions, tool-call mapping
+    ├── src/indexer.ts             local semantic index
+    └── src/participant.ts         @kin chat participant
+                 │
+                 ▼  HTTP to kin.ollama.baseUrl (default http://localhost:11434)
+        Ollama: /api/tags  /api/chat  /api/generate  /api/embed
+```
 
-Visual Studio Code is updated monthly with new features and bug fixes. You can download it for Windows, macOS, and Linux on [Visual Studio Code's website](https://code.visualstudio.com/Download). To get the latest releases every day, install the [Insiders build](https://code.visualstudio.com/insiders).
+**Why extension-first:** editing the workbench core makes every upstream merge painful. In Kin, the fork is only packaging and the extension is the product. The research and phase plan written before the build are in [`AI_IDE_PLAN.md`](AI_IDE_PLAN.md).
 
-## Contributing
+kin-ai sends requests only to the configured Ollama URL, which is localhost by default. The rest of the editor's network behavior is unchanged from upstream Code-OSS.
 
-There are many ways in which you can participate in this project, for example:
+## Run it
 
-* [Submit bugs and feature requests](https://github.com/microsoft/vscode/issues), and help us verify as they are checked in
-* Review [source code changes](https://github.com/microsoft/vscode/pulls)
-* Review the [documentation](https://github.com/microsoft/vscode-docs) and make pull requests for anything from typos to new content.
+You need the Node version in `.nvmrc`, the native toolchain from VS Code's [build prerequisites](https://github.com/microsoft/vscode/wiki/How-to-Contribute), and [Ollama](https://ollama.com).
 
-If you are interested in fixing issues and contributing directly to the code base,
-please see the document [How to Contribute](https://github.com/microsoft/vscode/wiki/How-to-Contribute), which covers the following:
+```bash
+# Models used by the default settings
+ollama pull llama3.2:3b               # @kin answers
+ollama pull qwen2.5-coder:1.5b-base   # Tab completions
+ollama pull nomic-embed-text          # codebase index
 
-* [How to build and run from source](https://github.com/microsoft/vscode/wiki/How-to-Contribute)
-* [The development workflow, including debugging and running tests](https://github.com/microsoft/vscode/wiki/How-to-Contribute#debugging)
-* [Coding guidelines](https://github.com/microsoft/vscode/wiki/Coding-Guidelines)
-* [Submitting pull requests](https://github.com/microsoft/vscode/wiki/How-to-Contribute#pull-requests)
-* [Finding an issue to work on](https://github.com/microsoft/vscode/wiki/How-to-Contribute#where-to-contribute)
-* [Contributing to translations](https://aka.ms/vscodeloc)
+# A tool-capable model for Agent mode (the one Agent mode was tested with)
+ollama pull qwen3:8b
 
-## Feedback
+npm install
+npm run watch        # builds the workbench and built-in extensions, including kin-ai
+./scripts/code.sh    # in a second terminal: launch Kin (Windows: scripts\code.bat)
+```
 
-* Ask a question on [Stack Overflow](https://stackoverflow.com/questions/tagged/vscode)
-* [Request a new feature](CONTRIBUTING.md)
-* Upvote [popular feature requests](https://github.com/microsoft/vscode/issues?q=is%3Aopen+is%3Aissue+label%3Afeature-request+sort%3Areactions-%2B1-desc)
-* [File an issue](https://github.com/microsoft/vscode/issues)
-* Connect with the extension author community on [GitHub Discussions](https://github.com/microsoft/vscode-discussions/discussions) or [Slack](https://aka.ms/vscode-dev-community)
-* Follow [@code](https://x.com/code) and let us know what you think!
+Then:
+- pick an Ollama model in the chat model picker
+- run **Kin: Index Workspace** from the Command Palette before asking `@kin`
 
-See our [wiki](https://github.com/microsoft/vscode/wiki/Feedback-Channels) for a description of each of these channels and information on some other available community-driven channels.
+## Settings
 
-## Related Projects
+| Setting | Default |
+|---|---|
+| `kin.ollama.baseUrl` | `http://localhost:11434` |
+| `kin.ollama.contextLength` / `kin.ollama.maxOutputTokens` | `8192` / `4096` |
+| `kin.completions.enabled` / `.model` / `.maxTokens` / `.debounceMs` | `true` / `qwen2.5-coder:1.5b-base` / `96` / `150` |
+| `kin.codebase.embeddingModel` / `.chatModel` / `.maxFiles` | `nomic-embed-text` / `llama3.2:3b` / `1500` |
 
-Many of the core components and extensions to VS Code live in their own repositories on GitHub. For example, the [node debug adapter](https://github.com/microsoft/vscode-node-debug) and the [mono debug adapter](https://github.com/microsoft/vscode-mono-debug) repositories are separate from each other. For a complete list, please visit the [Related Projects](https://github.com/microsoft/vscode/wiki/Related-Projects) page on our [wiki](https://github.com/microsoft/vscode/wiki).
+## Status
 
-## Bundled Extensions
+Kin is a prototype. It was built June 10–12, 2026 as five phased PRs ([#1](https://github.com/Nanda-Kiran/Kin/pull/1) rebrand, [#2](https://github.com/Nanda-Kiran/Kin/pull/2) chat, [#3](https://github.com/Nanda-Kiran/Kin/pull/3) Tab, [#4](https://github.com/Nanda-Kiran/Kin/pull/4) context engine, [#5](https://github.com/Nanda-Kiran/Kin/pull/5) agent), pair-programmed with Claude. Phases 1 to 4 were each checked by hand, as recorded in their PRs:
+- chat on `llama3.2:3b`
+- ghost text accepted with Tab
+- `@kin` citing the correct files on a real project
+- an agent on `qwen3:8b` creating a file through tool calls
 
-VS Code includes a set of built-in extensions located in the [extensions](extensions) folder, including grammars and snippets for many languages. Extensions that provide rich language support (inline suggestions, Go to Definition) for a language have the suffix `language-features`. For example, the `json` extension provides coloring for `JSON` and the `json-language-features` extension provides rich language support for `JSON`.
+Known limits:
+- Long multi-turn agent sessions use up the context window of small local models.
+- Retrieval is a brute-force cosine search over an in-memory index saved as one JSON file. Chunks are fixed 60-line windows. Indexing covers common source-file types and Markdown, up to 1,500 files by default, and skips files over 200 KB.
+- Saving a file re-embeds it only if it is already indexed. New and deleted files are picked up when **Kin: Index Workspace** runs again.
+- `@kin` is single-turn and resolves paths against the first workspace folder.
+- The upstream GitHub Copilot Chat extension (`extensions/copilot`) and its `defaultChatAgent` settings in `product.json` are still in the tree, unchanged.
+- kin-ai has no automated tests yet. The app icons are still Code-OSS's, and there are no packaged builds.
 
-## Development Container
-
-This repository includes a Visual Studio Code Dev Containers / GitHub Codespaces development container.
-
-* For [Dev Containers](https://aka.ms/vscode-remote/download/containers), use the **Dev Containers: Clone Repository in Container Volume...** command which creates a Docker volume for better disk I/O on macOS and Windows.
-  * If you already have VS Code and Docker installed, you can also click [here](https://vscode.dev/redirect?url=vscode://ms-vscode-remote.remote-containers/cloneInVolume?url=https://github.com/microsoft/vscode) to get started. This will cause VS Code to automatically install the Dev Containers extension if needed, clone the source code into a container volume, and spin up a dev container for use.
-
-* For Codespaces, install the [GitHub Codespaces](https://marketplace.visualstudio.com/items?itemName=GitHub.codespaces) extension in VS Code, and use the **Codespaces: Create New Codespace** command.
-
-Docker / the Codespace should have at least **4 cores and 6 GB of RAM (8 GB recommended)** to run a full build. See the [development container README](.devcontainer/README.md) for more information.
-
-## Code of Conduct
-
-This project has adopted the [Microsoft Open Source Code of Conduct](https://opensource.microsoft.com/codeofconduct/). For more information see the [Code of Conduct FAQ](https://opensource.microsoft.com/codeofconduct/faq/) or contact [opencode@microsoft.com](mailto:opencode@microsoft.com) with any additional questions or comments.
+Later steps in `AI_IDE_PLAN.md`, not built: a model gateway for hosted models, tree-sitter chunking and reranking, a fast-apply edit model, and a shadow workspace for agent self-correction.
 
 ## License
 
-Copyright (c) Microsoft Corporation. All rights reserved.
+MIT, inherited from Code-OSS ([LICENSE.txt](LICENSE.txt)). Kin is an independent project and is not affiliated with Microsoft.
 
-Licensed under the [MIT](LICENSE.txt) license.
+---
+
+Built by Nanda Kiran Velaga. I'm now building [Requal](https://requal.ai): automated eval infra for critical AI systems, from building golden datasets to gating releases.
